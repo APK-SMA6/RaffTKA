@@ -2782,7 +2782,7 @@ window.addEventListener('load',()=>{ initDb(); });
 <!-- ===== FIREBASE (Firestore + login admin) — blok tambahan ===== -->
 <script type="module" onerror="alert('Firebase gagal dimuat dari internet. Cek koneksi atau coba jaringan lain.')">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { initializeFirestore, getDocFromServer, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, signInWithPopup, signInWithRedirect, GoogleAuthProvider, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const ADMIN_UID = "QIALwhbuGiXVwkqDPK4xE4w9jO93";
@@ -2795,7 +2795,7 @@ const app = initializeApp({
   messagingSenderId: "838305853727",
   appId: "1:838305853727:web:9feff38481c2e3a23bc02a"
 });
-const fdb = getFirestore(app);
+const fdb = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
 const auth = getAuth(app);
 
 /* fungsi bantu umum */
@@ -2822,8 +2822,18 @@ onAuthStateChanged(auth, async user => {
   authReadyRes();
 });
 
+/* tes cepat: tulis lalu baca dari server Firestore */
+async function tesDb(){
+  try {
+    const ref = doc(fdb, 'users', 'zz_tes');
+    await setDoc(ref, { tes: Date.now() });
+    await getDocFromServer(ref);
+    report(null, 'Tes database BERHASIL: data terkirim ke Firestore dan terbaca dari server. Jika peserta lain tetap tidak muncul, perangkat mereka masih memakai file lama (muat ulang paksa).');
+  } catch (e) { report(e); }
+}
+
 /* laporan error database di layar (ketuk untuk menutup) */
-function report(e){
+function report(e, okMsg){
   try {
     console.warn(e);
     let b = document.getElementById('fb-err');
@@ -2833,16 +2843,18 @@ function report(e){
       b.onclick = () => b.remove();
       document.body.appendChild(b);
     }
-    b.textContent = 'Database error: ' + ((e && e.code) || '') + ' — ' + ((e && e.message) || e) + ' (ketuk untuk tutup)';
+    b.style.background = okMsg ? '#0d5c2b' : '#7a1010';
+    b.textContent = okMsg ? (okMsg + ' (ketuk untuk tutup)') : ('Database error: ' + ((e && e.code) || '') + ' — ' + ((e && e.message) || e) + ' (ketuk untuk tutup)');
   } catch (x) {}
 }
 const stat = document.createElement('div');
-stat.style.cssText = 'position:fixed;left:10px;bottom:24px;z-index:9998;font:11px sans-serif;color:#888;opacity:.6;';
+stat.style.cssText = 'position:fixed;left:6px;bottom:22px;z-index:9998;font:11px sans-serif;color:#888;opacity:.7;padding:6px 4px;cursor:pointer;';
+stat.onclick = () => tesDb();
 document.body.appendChild(stat);
 setInterval(() => {
   let m = '...';
   try { m = (dbMode === 'online') ? 'tersambung' : (dbMode === 'local' ? 'LOKAL (belum tersambung)' : 'menyambung...'); } catch (e) {}
-  stat.textContent = 'Database: ' + m;
+  stat.textContent = 'Database: ' + m + ' — ketuk untuk tes';
 }, 1500);
 
 /* cegah peserta 'keluar sendiri': jika data akunnya belum terkonfirmasi server
