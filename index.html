@@ -2780,9 +2780,9 @@ go=function(id){ if(id==='s-final') renderFinal(); origGo(id); };
 window.addEventListener('load',()=>{ initDb(); });
 </script>
 <!-- ===== FIREBASE (Firestore + login admin) — blok tambahan ===== -->
-<script type="module">
+<script type="module" onerror="alert('Firebase gagal dimuat dari internet. Cek koneksi atau coba jaringan lain.')">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, addDoc, getDocs, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, signInWithPopup, signInWithRedirect, GoogleAuthProvider, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const ADMIN_UID = "QIALwhbuGiXVwkqDPK4xE4w9jO93";
@@ -2822,6 +2822,29 @@ onAuthStateChanged(auth, async user => {
   authReadyRes();
 });
 
+/* laporan error database di layar (ketuk untuk menutup) */
+function report(e){
+  try {
+    console.warn(e);
+    let b = document.getElementById('fb-err');
+    if (!b) {
+      b = document.createElement('div'); b.id = 'fb-err';
+      b.style.cssText = 'position:fixed;left:8px;right:8px;top:8px;z-index:10000;background:#7a1010;color:#fff;font:12px/1.4 sans-serif;padding:10px 12px;border-radius:8px;word-break:break-word;';
+      b.onclick = () => b.remove();
+      document.body.appendChild(b);
+    }
+    b.textContent = 'Database error: ' + ((e && e.code) || '') + ' — ' + ((e && e.message) || e) + ' (ketuk untuk tutup)';
+  } catch (x) {}
+}
+const stat = document.createElement('div');
+stat.style.cssText = 'position:fixed;left:10px;bottom:24px;z-index:9998;font:11px sans-serif;color:#888;opacity:.6;';
+document.body.appendChild(stat);
+setInterval(() => {
+  let m = '...';
+  try { m = (dbMode === 'online') ? 'tersambung' : (dbMode === 'local' ? 'LOKAL (belum tersambung)' : 'menyambung...'); } catch (e) {}
+  stat.textContent = 'Database: ' + m;
+}, 1500);
+
 /* cegah peserta 'keluar sendiri': jika data akunnya belum terkonfirmasi server
    (misal penyimpanan tertunda/ditolak), pertahankan data lokalnya di daftar */
 const confirmed = new Set();
@@ -2844,6 +2867,14 @@ function guard(snap){
   return snap;
 }
 
+/* username ternyata sudah dipakai orang lain: keluarkan dan beri tahu */
+function usernameTaken(name){
+  try { delete users()[name]; } catch (e) {}
+  try { delete SYNCED[name]; } catch (e) {}
+  try { if (currentUser === name) logout(); } catch (e) {}
+  try { notify('Username "' + name + '" sudah dipakai orang lain. Silakan daftar dengan username lain.'); } catch (e) {}
+}
+
 /* jembatan untuk sistem database yang sudah ada di web (initDb) */
 window.claude = {
   use: async name => {
@@ -2858,12 +2889,37 @@ window.claude = {
     if (name === 'db') {
       return {
         collection: n => ({
-          onSnapshot: (ok, err) => onSnapshot(collection(fdb, n), snap => ok(guard(snap)), err)
+          onSnapshot: (ok, err) => onSnapshot(collection(fdb, n), snap => ok(guard(snap)), e => { report(e); err && err(e); })
         }),
         doc: path => {
           const [c, id] = path.split('/');
           const ref = doc(fdb, c, id);
-          return { set: d => setDoc(ref, d), delete: () => deleteDoc(ref) };
+          return {
+            /* simpan; jika username sudah dipakai orang lain (password beda), batalkan */
+            set: async d => {
+              try {
+                await runTransaction(fdb, async tx => {
+                  const cur = await tx.get(ref);
+                  const oldHash = cur.exists() ? (cur.data().passHash || null) : null;
+                  if (oldHash && oldHash !== (d.passHash || null)) {
+                    throw Object.assign(new Error('username dipakai'), { code: 'username-taken' });
+                  }
+                  tx.set(ref, d);
+                });
+              } catch (e) {
+                if (e && e.code === 'username-taken') { usernameTaken(d.user); return; }
+                report(e); throw e;
+              }
+            },
+            /* hapus data hanya boleh oleh admin yang sudah login Firebase */
+            delete: () => {
+              if (!adminNow) {
+                const e = { code: 'butuh-login-admin', message: 'Ketuk "Login Admin" di kiri bawah dulu, lalu hapus lagi.' };
+                report(e); return Promise.reject(e);
+              }
+              return deleteDoc(ref).catch(e => { report(e); throw e; });
+            }
+          };
         }
       };
     }
